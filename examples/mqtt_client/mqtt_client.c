@@ -16,13 +16,19 @@
  */
 
 #include "mongoose.h"
+#include <pthread.h>
 
 static const char *s_address = "localhost:1883";
 static const char *s_user_name = NULL;
 static const char *s_password = NULL;
-static const char *s_topic = "/stuff";
+static const char *s_subtopic = NULL;
+static const char *p_topic = NULL;
+
+static const char *s_topic = "/zizy";
 static struct mg_mqtt_topic_expression s_topic_expr = {NULL, 0};
 
+
+static struct mg_connection *s_nc = NULL;
 static void ev_handler(struct mg_connection *nc, int ev, void *p) {
   struct mg_mqtt_message *msg = (struct mg_mqtt_message *) p;
   (void) nc;
@@ -38,6 +44,7 @@ static void ev_handler(struct mg_connection *nc, int ev, void *p) {
 
       mg_set_protocol_mqtt(nc);
       mg_send_mqtt_handshake_opt(nc, "dummy", opts);
+      s_nc = nc;
       break;
     }
     case MG_EV_MQTT_CONNACK:
@@ -45,7 +52,11 @@ static void ev_handler(struct mg_connection *nc, int ev, void *p) {
         printf("Got mqtt connection error: %d\n", msg->connack_ret_code);
         exit(1);
       }
-      s_topic_expr.topic = s_topic;
+      if(s_subtopic)
+        s_topic_expr.topic = s_subtopic;
+      else
+        s_topic_expr.topic = s_topic;
+
       printf("Subscribing to '%s'\n", s_topic);
       mg_mqtt_subscribe(nc, &s_topic_expr, 1, 42);
       break;
@@ -55,6 +66,7 @@ static void ev_handler(struct mg_connection *nc, int ev, void *p) {
     case MG_EV_MQTT_SUBACK:
       printf("Subscription acknowledged, forwarding to '/test'\n");
       break;
+    // case MG_MQTT_CMD_PINGREQ: 
     case MG_EV_MQTT_PUBLISH: {
 #if 0
         char hex[1024] = {0};
@@ -65,6 +77,7 @@ static void ev_handler(struct mg_connection *nc, int ev, void *p) {
              msg->topic.p, (int) msg->payload.len, msg->payload.p);
 #endif
 
+      break;
       printf("Forwarding to /test\n");
       mg_mqtt_publish(nc, "/test", 65, MG_MQTT_QOS(0), msg->payload.p,
                       msg->payload.len);
@@ -74,6 +87,22 @@ static void ev_handler(struct mg_connection *nc, int ev, void *p) {
       printf("Connection closed\n");
       exit(1);
   }
+}
+
+void *thread_handler(void *arg)
+{
+  
+  pthread_detach(pthread_self());
+  static char test[] = "hello world";
+  
+  while(1) {
+    sleep(1);
+    if(s_nc && p_topic) {
+      mg_mqtt_publish(s_nc, "/zizy", 65, MG_MQTT_QOS(0), test, sizeof(test));
+      printf("to publish\n");
+    }
+  }
+  pthread_exit(NULL);
 }
 
 int main(int argc, char **argv) {
@@ -92,6 +121,10 @@ int main(int argc, char **argv) {
       s_topic = argv[++i];
     } else if (strcmp(argv[i], "-p") == 0) {
       s_password = argv[++i];
+    } else if (strcmp(argv[i], "-s") == 0) {
+      s_subtopic = argv[++i];
+    } else if (strcmp(argv[i], "-pub") == 0) {
+      p_topic = argv[++i];
     }
   }
 
@@ -100,6 +133,8 @@ int main(int argc, char **argv) {
     exit(EXIT_FAILURE);
   }
 
+  pthread_t pid;
+  pthread_create(&pid, NULL, thread_handler, NULL);
   for (;;) {
     mg_mgr_poll(&mgr, 1000);
   }
